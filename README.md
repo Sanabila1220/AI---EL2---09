@@ -35,5 +35,3 @@ This assignment is expected to provide an understanding of:
 - The concepts and applications of Expert Systems.
 - The working principles and differences between Search Algorithms.
 - The roles, interactions, and coordination of agents in Multi-Agent Systems.
-
-Screenshots, program outputs, and implementation results can be added to this section after the assignment has been completed.
