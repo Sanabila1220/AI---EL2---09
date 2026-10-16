@@ -1,0 +1,168 @@
+"""
+SISTEM PAKAR DIAGNOSIS KERUSAKAN LAPTOP
+Mata Kuliah : Kecerdasan Buatan
+Metode      : Forward Chaining + Certainty Factor (CF)
+
+Komponen Sistem Pakar:
+1. Basis Pengetahuan (Knowledge Base)  -> GEJALA, KERUSAKAN, RULES
+2. Working Memory (Fakta)              -> dict `fakta` hasil input pengguna
+3. Mesin Inferensi                     -> fungsi `inferensi()`
+4. Fasilitas Penjelasan                -> fungsi `jelaskan()`
+5. Antarmuka Pengguna                  -> fungsi `tanya_gejala()` dan `main()`
+"""
+
+# ---------------------------------------------------------------
+# 1. BASIS PENGETAHUAN
+# ---------------------------------------------------------------
+GEJALA = {
+    "G01": "Laptop tidak menyala sama sekali",
+    "G02": "Lampu indikator charger tidak menyala",
+    "G03": "Baterai cepat habis / tidak mengisi",
+    "G04": "Layar blank tetapi laptop terdengar menyala",
+    "G05": "Layar bergaris atau berkedip",
+    "G06": "Laptop sering restart / mati sendiri",
+    "G07": "Laptop sangat panas dan kipas berisik",
+    "G08": "Laptop lambat dan sering hang",
+    "G09": "Terdengar bunyi klik dari harddisk",
+    "G10": "Muncul pesan 'No bootable device' / gagal booting",
+    "G11": "Muncul layar biru (blue screen)",
+    "G12": "Banyak iklan / pop-up tidak dikenal",
+}
+
+KERUSAKAN = {
+    "K01": "Adaptor / charger rusak",
+    "K02": "Baterai rusak / soak",
+    "K03": "Layar atau kabel fleksibel LCD rusak",
+    "K04": "Overheat (kipas kotor / thermal paste kering)",
+    "K05": "Harddisk rusak / bad sector",
+    "K06": "Infeksi virus / malware",
+    "K07": "RAM bermasalah",
+    "K08": "Kerusakan sistem operasi",
+}
+
+# Setiap rule: (kode, [premis gejala], kesimpulan, CF pakar)
+RULES = [
+    ("R01", ["G01", "G02"],               "K01", 0.90),
+    ("R02", ["G01", "G03"],               "K02", 0.80),
+    ("R03", ["G03"],                      "K02", 0.50),
+    ("R04", ["G04", "G05"],               "K03", 0.85),
+    ("R05", ["G04"],                      "K07", 0.50),
+    ("R06", ["G06", "G07"],               "K04", 0.90),
+    ("R07", ["G07", "G08"],               "K04", 0.60),
+    ("R08", ["G08", "G09"],               "K05", 0.85),
+    ("R09", ["G09", "G10"],               "K05", 0.95),
+    ("R10", ["G08", "G12"],               "K06", 0.85),
+    ("R11", ["G11", "G06"],               "K07", 0.75),
+    ("R12", ["G10"],                      "K08", 0.60),
+    ("R13", ["G11", "G10"],               "K08", 0.80),
+]
+
+# ---------------------------------------------------------------
+# 2. WORKING MEMORY
+# ---------------------------------------------------------------
+fakta = {}        # {kode_gejala: CF dari pengguna}
+jejak_rule = {}   # {kode_kerusakan: [(rule, cf_rule_terhitung), ...]}
+
+# Bobot keyakinan pengguna
+PILIHAN_CF = {
+    "1": ("Tidak", 0.0),
+    "2": ("Sedikit yakin", 0.4),
+    "3": ("Cukup yakin", 0.6),
+    "4": ("Yakin", 0.8),
+    "5": ("Sangat yakin", 1.0),
+}
+
+
+# ---------------------------------------------------------------
+# 3. MESIN INFERENSI (Forward Chaining + CF)
+# ---------------------------------------------------------------
+def gabung_cf(cf_lama, cf_baru):
+    """Kombinasi dua CF yang mendukung kesimpulan yang sama (CF paralel)."""
+    return cf_lama + cf_baru * (1 - cf_lama)
+
+
+def inferensi():
+    """Jalankan forward chaining: cocokkan rule dengan fakta yang ada."""
+    hasil = {}
+    jejak_rule.clear()
+
+    for kode, premis, kesimpulan, cf_pakar in RULES:
+        # Rule hanya aktif jika SEMUA premis terpenuhi (CF > 0)
+        if all(fakta.get(g, 0) > 0 for g in premis):
+            cf_premis = min(fakta[g] for g in premis)   # operator AND = min
+            cf_rule = cf_premis * cf_pakar
+            hasil[kesimpulan] = gabung_cf(hasil.get(kesimpulan, 0), cf_rule)
+            jejak_rule.setdefault(kesimpulan, []).append((kode, cf_rule))
+
+    return dict(sorted(hasil.items(), key=lambda x: x[1], reverse=True))
+
+
+# ---------------------------------------------------------------
+# 4. FASILITAS PENJELASAN
+# ---------------------------------------------------------------
+def jelaskan(kode_kerusakan):
+    print(f"\n  Alasan untuk '{KERUSAKAN[kode_kerusakan]}':")
+    for kode_rule, cf in jejak_rule[kode_kerusakan]:
+        rule = next(r for r in RULES if r[0] == kode_rule)
+        premis = " DAN ".join(GEJALA[g] for g in rule[1])
+        print(f"   - {kode_rule}: JIKA {premis}")
+        print(f"       MAKA {KERUSAKAN[rule[2]]} (CF rule = {cf:.2f})")
+
+
+# ---------------------------------------------------------------
+# 5. ANTARMUKA PENGGUNA
+# ---------------------------------------------------------------
+def tanya_gejala():
+    print("\nJawab setiap pertanyaan dengan angka 1-5:")
+    for k, (label, _) in PILIHAN_CF.items():
+        print(f"  {k} = {label}")
+    print("-" * 55)
+
+    for kode, deskripsi in GEJALA.items():
+        while True:
+            jawab = input(f"[{kode}] {deskripsi}? ").strip()
+            if jawab in PILIHAN_CF:
+                fakta[kode] = PILIHAN_CF[jawab][1]
+                break
+            print("   Masukkan angka 1-5.")
+
+
+def tampilkan_hasil(hasil):
+    print("\n" + "=" * 55)
+    print("HASIL DIAGNOSIS")
+    print("=" * 55)
+
+    if not hasil:
+        print("Tidak ada kerusakan yang cocok dengan gejala Anda.")
+        print("Disarankan memeriksakan laptop ke teknisi.")
+        return
+
+    for i, (kode, cf) in enumerate(hasil.items(), 1):
+        print(f"{i}. {KERUSAKAN[kode]:<48} {cf * 100:5.1f}%")
+
+    teratas = next(iter(hasil))
+    print(f"\nKesimpulan utama: {KERUSAKAN[teratas]} "
+          f"(keyakinan {hasil[teratas] * 100:.1f}%)")
+
+    if input("\nTampilkan penjelasan? (y/n): ").strip().lower() == "y":
+        for kode in hasil:
+            jelaskan(kode)
+
+
+def main():
+    print("=" * 55)
+    print("  SISTEM PAKAR DIAGNOSIS KERUSAKAN LAPTOP")
+    print("  Metode: Forward Chaining + Certainty Factor")
+    print("=" * 55)
+
+    while True:
+        fakta.clear()
+        tanya_gejala()
+        tampilkan_hasil(inferensi())
+        if input("\nDiagnosis lagi? (y/n): ").strip().lower() != "y":
+            print("Terima kasih!")
+            break
+
+
+if __name__ == "__main__":
+    main()
