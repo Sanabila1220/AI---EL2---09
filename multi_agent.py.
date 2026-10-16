@@ -1,0 +1,198 @@
+"""
+SIMULASI SISTEM MULTI-AGENT: ROBOT PEMBERSIH KOLABORATIF
+Mata Kuliah : Kecerdasan Buatan
+
+Skenario : beberapa robot (agen) membersihkan kotoran '*' di sebuah ruangan grid.
+Mode     :
+  1. MANDIRI        -> tiap agen memilih kotoran terdekat sendiri, tanpa komunikasi
+  2. TERKOORDINASI  -> agen berkomunikasi lewat lelang (Contract Net Protocol):
+                       manajer mengumumkan tugas, agen mengirim tawaran (jarak),
+                       tugas diberikan ke tawaran terbaik.
+
+Karakteristik agen: otonom, memiliki persepsi, bertindak di lingkungan bersama,
+dan (pada mode terkoordinasi) berkomunikasi serta berkoordinasi.
+"""
+
+import random
+
+UKURAN = 12
+JUMLAH_KOTORAN = 15
+POSISI_AWAL = [(0, 0), (0, UKURAN - 1), (UKURAN - 1, 0)]
+NAMA_AGEN = ["A", "B", "C"]
+MAKS_TICK = 500
+
+
+def jarak(a, b):
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+# ---------------------------------------------------------------
+# 1. AGEN
+# ---------------------------------------------------------------
+class Agen:
+    def __init__(self, nama, posisi):
+        self.nama = nama
+        self.pos = posisi
+        self.tugas = None          # kotoran yang sedang dituju
+        self.langkah = 0           # total langkah
+        self.langkah_tugas = 0     # langkah pada tugas saat ini
+        self.langkah_sia = 0       # langkah untuk tugas yang keburu dibersihkan agen lain
+        self.dibersihkan = 0
+
+    def menganggur(self):
+        return self.tugas is None
+
+    def beri_tawaran(self, tugas):
+        """Komunikasi: balas pengumuman tugas dengan tawaran (jarak, makin kecil makin baik)."""
+        return jarak(self.pos, tugas)
+
+    def terima_tugas(self, tugas):
+        self.tugas = tugas
+        self.langkah_tugas = 0
+
+    def pilih_terdekat(self, lingkungan):
+        """Mode mandiri: pilih kotoran terdekat berdasarkan persepsi sendiri."""
+        if lingkungan.kotoran:
+            self.terima_tugas(min(lingkungan.kotoran, key=lambda d: (jarak(self.pos, d), d)))
+
+    def bertindak(self, lingkungan):
+        if self.tugas is None:
+            return
+        # Persepsi: apakah tugas masih ada?
+        if self.tugas not in lingkungan.kotoran:
+            self.langkah_sia += self.langkah_tugas
+            self.tugas = None
+            return
+        # Aksi: bergerak satu langkah mendekati tugas
+        self.pos = self._langkah_berikut(lingkungan)
+        self.langkah += 1
+        self.langkah_tugas += 1
+        # Aksi: membersihkan jika sudah tiba
+        if self.pos == self.tugas:
+            lingkungan.kotoran.discard(self.pos)
+            self.dibersihkan += 1
+            self.tugas = None
+
+    def _langkah_berikut(self, lingkungan):
+        r, c = self.pos
+        tr, tc = self.tugas
+        dr = (tr > r) - (tr < r)
+        dc = (tc > c) - (tc < c)
+        kandidat = []
+        if abs(tr - r) >= abs(tc - c):
+            kandidat = [(r + dr, c) if dr else None, (r, c + dc) if dc else None]
+        else:
+            kandidat = [(r, c + dc) if dc else None, (r + dr, c) if dr else None]
+        terisi = {a.pos for a in lingkungan.agen if a is not self}
+        for k in kandidat:
+            if k and k not in terisi:
+                return k
+        return self.pos  # menunggu jika jalan terhalang agen lain
+
+
+# ---------------------------------------------------------------
+# 2. LINGKUNGAN
+# ---------------------------------------------------------------
+class Lingkungan:
+    def __init__(self, seed):
+        rng = random.Random(seed)
+        sel = [(r, c) for r in range(UKURAN) for c in range(UKURAN)
+               if (r, c) not in POSISI_AWAL]
+        self.kotoran = set(rng.sample(sel, JUMLAH_KOTORAN))
+        self.agen = [Agen(n, p) for n, p in zip(NAMA_AGEN, POSISI_AWAL)]
+        self.log = []
+
+    def gambar(self):
+        peta = [["." for _ in range(UKURAN)] for _ in range(UKURAN)]
+        for r, c in self.kotoran:
+            peta[r][c] = "*"
+        for a in self.agen:
+            peta[a.pos[0]][a.pos[1]] = a.nama
+        return "\n".join("  " + " ".join(b) for b in peta)
+
+    def lelang(self, tick):
+        """Contract Net Protocol: umumkan tugas -> kumpulkan tawaran -> beri kontrak."""
+        # Lelang ulang dinamis: semua agen ikut bertawar setiap tick, sehingga
+        # tugas dapat dialihkan ke agen yang lebih dekat (menghindari agen
+        # menganggur sementara agen lain terjebak tugas yang jauh).
+        peserta = list(self.agen)
+        terbuka = list(self.kotoran)
+
+        while peserta and terbuka:
+            tawaran = [(a.beri_tawaran(d), d, a.nama, a)
+                       for a in peserta for d in terbuka]
+            nilai, tugas, nama, pemenang = min(tawaran, key=lambda t: t[:3])
+            if pemenang.tugas != tugas:          # kontrak baru / pengalihan tugas
+                pemenang.terima_tugas(tugas)
+                self.log.append(f"  [t={tick:>3}] Manajer: tugas {tugas} -> Agen {nama} (tawaran {nilai})")
+            peserta.remove(pemenang)
+            terbuka.remove(tugas)
+
+        for a in peserta:                        # agen tanpa tugas tersisa
+            a.tugas = None
+
+
+# ---------------------------------------------------------------
+# 3. SIMULASI
+# ---------------------------------------------------------------
+def simulasi(mode, seed, verbose=False):
+    env = Lingkungan(seed)
+    if verbose:
+        print(f"\n--- Kondisi awal (mode {mode}) ---")
+        print(env.gambar())
+
+    tick = 0
+    while env.kotoran and tick < MAKS_TICK:
+        tick += 1
+        if mode == "TERKOORDINASI":
+            env.lelang(tick)
+        else:
+            for a in env.agen:
+                if a.menganggur():
+                    a.pilih_terdekat(env)
+        for a in env.agen:
+            a.bertindak(env)
+
+    hasil = {
+        "tick": tick,
+        "langkah": sum(a.langkah for a in env.agen),
+        "sia": sum(a.langkah_sia for a in env.agen),
+        "per_agen": {a.nama: a.dibersihkan for a in env.agen},
+    }
+    if verbose:
+        if env.log:
+            print("\nLog komunikasi (10 pesan pertama):")
+            print("\n".join(env.log[:10]))
+        print(f"\nSelesai dalam {tick} tick | total langkah {hasil['langkah']} "
+              f"| langkah sia-sia {hasil['sia']}")
+        print(f"Kotoran dibersihkan per agen: {hasil['per_agen']}")
+    return hasil
+
+
+def main():
+    print("=" * 62)
+    print("  SIMULASI MULTI-AGENT: ROBOT PEMBERSIH KOLABORATIF")
+    print("=" * 62)
+
+    # Demonstrasi satu skenario (seed sama untuk kedua mode)
+    for mode in ("MANDIRI", "TERKOORDINASI"):
+        simulasi(mode, seed=7, verbose=True)
+
+    # Perbandingan statistik pada banyak skenario acak
+    jumlah = 50
+    print("\n" + "=" * 62)
+    print(f"PERBANDINGAN RATA-RATA PADA {jumlah} SKENARIO ACAK")
+    print("=" * 62)
+    print(f"{'Mode':<16}{'Tick':>10}{'Langkah':>12}{'Langkah sia-sia':>20}")
+    print("-" * 62)
+    for mode in ("MANDIRI", "TERKOORDINASI"):
+        hasil = [simulasi(mode, s) for s in range(jumlah)]
+        rata = lambda k: sum(h[k] for h in hasil) / jumlah
+        print(f"{mode:<16}{rata('tick'):>10.1f}{rata('langkah'):>12.1f}{rata('sia'):>20.1f}")
+    print("=" * 62)
+    print("Tick = waktu hingga semua bersih (makin kecil makin cepat).")
+    print("Langkah sia-sia = langkah menuju kotoran yang keburu dibersihkan agen lain.")
+
+
+if __name__ == "__main__":
+    main()
